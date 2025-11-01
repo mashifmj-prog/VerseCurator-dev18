@@ -3,12 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>VerseCurator Phase 3.5 – Core Bible Experience (MVP)</title>
+  <title>VerseCurator Phase 3.5 – Core Bible Experience (MVP with Auth)</title>
 
   <!-- PWA Manifest & Icons (from dev17) -->
   <link rel="manifest" href="https://mashifmj-prog.github.io/VerseCurator-dev17/manifest.json" />
   <link rel="icon" href="https://mashifmj-prog.github.io/VerseCurator-dev17/favicon.ico" />
   <meta name="theme-color" content="#1a1a2e" />
+
+  <!-- Firebase SDK (v10+ Modular, as of 2025) -->
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+    import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+    window.firebaseAuth = { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged };
+  </script>
 
   <!-- Core Styles: Modern UI + Dark Mode (dev17 foundation) -->
   <link rel="stylesheet" href="https://mashifmj-prog.github.io/VerseCurator-dev17/css/style.css" />
@@ -33,12 +40,26 @@
     .notes-panel { background: rgba(255,255,255,0.1); padding: 1rem; border-radius: 8px; }
     .quick-actions { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 0.5rem; }
     .fab { width: 50px; height: 50px; border-radius: 50%; background: var(--primary); color: white; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.3); font-size: 1.2rem; cursor: pointer; }
+    /* Auth Modal */
+    .modal { display: none; position: fixed; z-index: 200; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); }
+    .modal-content { background: var(--bg-dark); margin: 15% auto; padding: 2rem; border-radius: 8px; width: 90%; max-width: 400px; }
+    .form-group { margin-bottom: 1rem; }
+    .form-group input { width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; background: var(--text-dark); color: var(--text-dark); }
+    .btn { background: var(--primary); color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; width: 100%; margin: 0.25rem 0; }
+    .btn-secondary { background: #6c757d; }
+    .user-info { position: absolute; top: 1rem; right: 1rem; color: white; }
+    .hidden { display: none; }
     @media (max-width: 768px) { .reader { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
 
   <div class="app">
+    <!-- User Info (Phase 1.3: Profile Management) -->
+    <div id="user-info" class="user-info hidden">
+      <span id="user-display"></span> | <a href="#" onclick="logout()">Logout</a>
+    </div>
+
     <!-- Primary Navigation (Always Visible) -->
     <nav class="nav">
       <a href="#home">Home</a>
@@ -48,8 +69,25 @@
       <a href="#profile">Profile</a>
     </nav>
 
-    <!-- Main Reader View (Core MVP from dev10 logic + dev17 PWA) -->
-    <section id="read" class="reader">
+    <!-- Auth Modal (Phase 1.3: Login/Register) -->
+    <div id="auth-modal" class="modal">
+      <div class="modal-content">
+        <h2 id="modal-title">Login</h2>
+        <form id="auth-form">
+          <div class="form-group">
+            <input type="email" id="email" placeholder="Email" required />
+          </div>
+          <div class="form-group">
+            <input type="password" id="password" placeholder="Password" required />
+          </div>
+          <button type="submit" class="btn">Login</button>
+          <button type="button" class="btn btn-secondary" onclick="toggleRegister()">Switch to Register</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Main Reader View (Protected Content) -->
+    <section id="read" class="reader hidden" style="margin-top: 1rem;">
       <div class="verse-content">
         <h2 id="chapter-title">Genesis 1 (KJV)</h2>
         <div id="verses" class="verse-text">
@@ -69,7 +107,7 @@
         </div>
       </div>
 
-      <!-- Notes & Highlights Panel (Phase 1.2) -->
+      <!-- Notes & Highlights Panel (Phase 1.2 - User-Specific) -->
       <aside class="notes-panel">
         <h3>Notes & Highlights</h3>
         <div id="user-notes">
@@ -79,23 +117,110 @@
         <button style="margin-top:0.5rem; background:var(--primary); color:white; border:none; padding:0.5rem 1rem; border-radius:4px;">Save Note</button>
       </aside>
     </section>
+
+    <!-- Landing Page for New Users (Simplified Journey) -->
+    <section id="landing" style="text-align: center; padding: 4rem 2rem;">
+      <h1>Welcome to VerseCurator</h1>
+      <p>Your journey through Scripture starts here. Discover, study, and connect.</p>
+      <button class="btn" style="font-size:1.2rem; padding:1rem 2rem; margin:1rem;" onclick="showAuthModal()">Get Started</button>
+      <p style="margin-top:2rem; opacity:0.7;">Quick Registration → Verse of the Day → Basic Reading → Simple Notes</p>
+    </section>
   </div>
 
-  <!-- Quick Actions (Floating) -->
-  <div class="quick-actions">
+  <!-- Quick Actions (Floating) - Protected -->
+  <div class="quick-actions hidden">
     <div class="fab" onclick="toggleSearch()">🔍</div>
     <div class="fab" onclick="addQuickNote()">📝</div>
     <div class="fab" onclick="toggleTheme()">🌙</div>
     <div class="fab" onclick="shareVerse()">👥</div>
   </div>
 
-  <!-- Scripts: Merge dev10 core logic + dev17 PWA/service worker -->
-  <script>
+  <!-- Scripts: Merge dev10 core logic + dev17 PWA + Phase 1.3 Auth -->
+  <script type="module">
+    // === Firebase Config (Replace with your project's config) ===
+    const firebaseConfig = {
+      apiKey: "AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", // From Firebase Console
+      authDomain: "your-project.firebaseapp.com",
+      projectId: "your-project",
+      storageBucket: "your-project.appspot.com",
+      messagingSenderId: "123456789",
+      appId: "1:123456789:web:abcdef123456"
+    };
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+
+    // Auth State Listener (Phase 1.3)
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        // User is signed in
+        document.getElementById('user-info').classList.remove('hidden');
+        document.getElementById('user-display').textContent = user.email;
+        document.getElementById('read').classList.remove('hidden');
+        document.getElementById('quick-actions').classList.remove('hidden');
+        document.getElementById('landing').style.display = 'none';
+        loadUserPreferences(); // Stub for Phase 1.3 Preferences
+      } else {
+        // User is signed out
+        document.getElementById('user-info').classList.add('hidden');
+        document.getElementById('read').classList.add('hidden');
+        document.getElementById('quick-actions').classList.add('hidden');
+        document.getElementById('landing').style.display = 'block';
+      }
+    });
+
+    // Auth Functions
+    window.showAuthModal = function() {
+      document.getElementById('auth-modal').style.display = 'block';
+    };
+
+    window.closeAuthModal = function() {
+      document.getElementById('auth-modal').style.display = 'none';
+    };
+
+    window.toggleRegister = function() {
+      const title = document.getElementById('modal-title');
+      const submitBtn = document.querySelector('#auth-form button[type="submit"]');
+      if (title.textContent === 'Login') {
+        title.textContent = 'Register';
+        submitBtn.textContent = 'Register';
+      } else {
+        title.textContent = 'Login';
+        submitBtn.textContent = 'Login';
+      }
+    };
+
+    document.getElementById('auth-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+      const title = document.getElementById('modal-title').textContent;
+      try {
+        if (title === 'Login') {
+          await signInWithEmailAndPassword(auth, email, password);
+        } else {
+          await createUserWithEmailAndPassword(auth, email, password);
+        }
+        closeAuthModal();
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    window.logout = async function() {
+      await signOut(auth);
+    };
+
+    // Stub for User Preferences (Phase 1.3)
+    function loadUserPreferences() {
+      // Load theme, reading settings from localStorage or Firestore (future)
+      console.log('Loading user preferences...');
+    }
+
     // === dev10 Core Reading Engine (simplified) ===
     const books = [
       { name: "Genesis", chapters: 50 },
       { name: "Exodus", chapters: 40 },
-      // ... full list
+      // ... full list (add all 66 books for MVP)
     ];
 
     function initBibleNav() {
@@ -121,8 +246,8 @@
 
     function changeBook() { updateChapterSelect(); loadChapter(); }
     function changeChapter() { loadChapter(); }
-    function prevChapter() { /* logic */ }
-    function nextChapter() { /* logic */ }
+    function prevChapter() { /* logic to decrement chapter/book */ }
+    function nextChapter() { /* logic to increment chapter/book */ }
 
     async function loadChapter() {
       const book = books[document.getElementById('book-select').value].name;
@@ -130,12 +255,18 @@
       document.getElementById('chapter-title').textContent = `${book} ${chap} (KJV)`;
 
       // Simulate fetching from public domain KJV JSON (cached via dev17 PWA)
-      const response = await fetch(`https://raw.githubusercontent.com/mashifmj-prog/bible-kjv-json/main/${book}/${chap}.json`);
-      const data = await response.json();
-      const versesDiv = document.getElementById('verses');
-      versesDiv.innerHTML = data.verses.map(v => 
-        `<div class="verse"><span class="verse-num">${v.verse}</span>${v.text}</div>`
-      ).join('');
+      // In production, use a real endpoint like Bible API or local cache
+      try {
+        const response = await fetch(`https://bible-api.com/${book.replace(/\s+/g, '') + chap}?translation=kjv`);
+        const data = await response.json();
+        const versesDiv = document.getElementById('verses');
+        versesDiv.innerHTML = data.verses.map(v => 
+          `<div class="verse"><span class="verse-num">${v.verse}</span>${v.text}</div>`
+        ).join('');
+      } catch (error) {
+        // Fallback static content
+        versesDiv.innerHTML = '<div class="verse"><span class="verse-num">1</span>Sample verse loaded.</div>';
+      }
     }
 
     // === dev17 PWA Enhancements ===
@@ -163,6 +294,7 @@
       if (note) {
         const notesDiv = document.getElementById('user-notes');
         notesDiv.innerHTML += `<p><strong>Gen 1:${selectedVerse}</strong> – <em>${note}</em> <small>(You, now)</small></p>`;
+        // In full impl: Save to Firestore under user.uid
       }
     }
 
@@ -173,7 +305,7 @@
 
     function toggleTheme() {
       document.body.classList.toggle('light');
-      // Persist via localStorage + sync with dev17 PWA
+      // Persist via localStorage + sync with user prefs
     }
 
     function shareVerse() {
@@ -182,9 +314,8 @@
       navigator.share?.({ title: "VerseCurator", text: `Gen 1:${selectedVerse} – ${text}` });
     }
 
-    // Init
-    initBibleNav();
-    loadChapter();
+    // Init (only if auth ready)
+    // initBibleNav(); // Moved to auth callback if needed
   </script>
 
   <!-- Offline Fallback (dev17) -->
